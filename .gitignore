@@ -1,0 +1,7 @@
+*.pem
+*.json
+truffle-config.js
+node_modules/
+.idea/
+app/dist
+app/node_modules

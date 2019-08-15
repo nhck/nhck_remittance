@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <title>Remmittance</title>
+</head>
+<body class="text-center">
+<form class="form-share">
+
+    <img class="mb-4" src="split.svg" alt="" width="45" height="45">
+    <h1 class="h3 mb-3 font-weight-normal">Please select to split in</h1>
+    <div id="statusMessage" class="alert alert-dark d-none" role="alert">
+
+    </div>
+    <label for="inputFirstPart" class="sr-only">Retrieval Code Part One</label>
+    <input type="text" id="inputFirstPart" class="form-control" placeholder="Secret Part One" required autofocus>
+
+    <label for="inputSecondPart" class="sr-only">Retrieval Code Part Two</label>
+    <input type="text" id="inputSecondPart" class="form-control" placeholder="Secret Part Two" required>
+
+    <label for="inputToAddress">For creation please provide an address and amount</label>
+    <div class="input-group mb-3">
+        <div class="input-group-prepend">
+            <span class="input-group-text" id="inputToAddressTX">Ethereum address:</span>
+        </div>
+        <input type="text" id="inputToAddress" class="form-control" placeholder="0x0123456834">
+    </div>
+    <div class="input-group mb-3">
+        <div class="input-group-prepend">
+            <span class="input-group-text" id="inputToAddressAmountEther">Ether</span>
+        </div>
+        <input type="text" id="inputToAddressAmount" class="form-control">
+    </div>
+
+    <button type="button" id="create" class="btn btn-lg  btn-secondary" onClick="App.deposit()">Create</button>
+    <button type="button" id="retrieve" class="btn btn-lg btn-secondary" onclick="App.withdraw()">Withdraw</button>
+
+
+</form>
+<script src="index.js"></script>
+</body>
+</html>
