@@ -10,10 +10,10 @@ contract Remittance is Stoppable {
     using SafeMath for uint;
 
     event LogWithdrawn(address indexed sender, uint amount, bytes32 retrievalCodeSecure);
-    event LogDeposited(address indexed sender, uint amount, uint expiresTimestamp, bytes32 retrievalCodeSecure);
+    event LogDeposited(address indexed sender, uint amount, uint expiresTimestamp, bytes32 retrievalCodeSecure, uint feePaid);
     event LogDepositReclaimed(address indexed sender, uint amount, bytes32 retrievalCodeSecure);
     event LogTimestampExtended(address indexed sender, uint expiresTimestamp, bytes32 retrievalCodeSecure);
-    event LogTimestampShortend(address indexed sender, uint expiresTimestamp, bytes32 retrievalCodeSecure);
+    event LogFeesWithdrawn(address indexed sender, uint amount);
 
     struct Payment {
         address sender;
@@ -23,7 +23,11 @@ contract Remittance is Stoppable {
 
     mapping(bytes32 => Payment) public payments;
 
-    uint expiryLimit;
+    uint public expiryLimit;
+
+    uint public feeWei = 29000; //actual deployment is 2 915 986 gas, so this seems fair
+    uint public feeThresholdPermille = 10;
+    uint public feeBalance;
 
     constructor(bool startRunning, uint setExpiryLimit) Stoppable(startRunning) public {
         expiryLimit = setExpiryLimit;
@@ -46,22 +50,38 @@ contract Remittance is Stoppable {
     }
 
     /**
-     * Allows deposit for a retrievalCodeSecure
+     * Allows deposit for a retrievalCodeSecure.
+     * A fee {feeWei} is deducted of the deposit if the value of {feeThresholdPermille} per mille of the payAmount is larger than the fee.
      *
      * @param retrievalCodeSecure - a double keccak256 hash generated locally using two string parts and the target address
      *
      * @return true on success
      */
     function deposit(bytes32 retrievalCodeSecure, uint expiresTimestamp) onlyIfRunning public payable returns (bool success) {
-        require(msg.value > 0, "Please send value to this contract");
+        uint paymentAmount = msg.value;
+
+        require(paymentAmount > 0, "Please send value to this contract");
         require(retrievalCodeSecure > 0, "Retrieval code needs to be provided");
         require(payments[retrievalCodeSecure].amount == 0, "Retrieval code already in use");
         require(expiresTimestamp > block.timestamp, "Expiry Timestamp should be greater than now");
         require(expiresTimestamp <= block.timestamp.add(expiryLimit), "Expiry Timestamp too far in the future");
 
-        payments[retrievalCodeSecure] = Payment({sender : msg.sender, amount : msg.value, expiresTimestamp : expiresTimestamp});
 
-        emit LogDeposited(msg.sender, msg.value, expiresTimestamp, retrievalCodeSecure);
+        uint feeLog = 0;
+
+        if(paymentAmount.mul(feeThresholdPermille) > feeWei.mul(1000)) {
+            feeLog = feeWei;
+            paymentAmount = msg.value.sub(feeWei);
+            feeBalance = feeBalance.add(feeWei);
+        }
+
+        payments[retrievalCodeSecure] = Payment({
+            sender : msg.sender,
+            amount : paymentAmount,
+            expiresTimestamp : expiresTimestamp
+            });
+
+        emit LogDeposited(msg.sender, paymentAmount, expiresTimestamp, retrievalCodeSecure, feeLog);
 
         return true;
     }
@@ -74,16 +94,14 @@ contract Remittance is Stoppable {
      * @return bool true on success
      */
     function withdraw(bytes32 retrievalCode) beyondEndOfLifeOrOnlyIfRunning public returns (bool success) {
-        require(retrievalCode > 0, "Retrieval code must be provided");
-
         bytes32 retrievalCodeSecure = createRetrievalCodeSecure(retrievalCode, msg.sender);
 
-        require(payments[retrievalCodeSecure].expiresTimestamp >=  block.timestamp, "Payment expired");
+        require(payments[retrievalCodeSecure].expiresTimestamp >= block.timestamp, "Payment expired");
         uint payout = payments[retrievalCodeSecure].amount;
 
         require(payout > 0, "Retrieval code does not exist or has been used");
 
-        payments[retrievalCodeSecure].amount = 0;
+        delete (payments[retrievalCodeSecure]);
         emit LogWithdrawn(msg.sender, payout, retrievalCodeSecure);
         msg.sender.transfer(payout);
 
@@ -124,39 +142,59 @@ contract Remittance is Stoppable {
     function expireTimeExtend(bytes32 retrievalCodeSecure, uint extensionSeconds) onlyIfRunning public returns (bool success) {
         require(payments[retrievalCodeSecure].sender == msg.sender, "Sender must match the record in the retrieval code.");
 
-        // I hope this saves gas
         uint expiresTimestamp = payments[retrievalCodeSecure].expiresTimestamp.add(extensionSeconds);
-
-        require(expiresTimestamp <= block.timestamp.add(expiryLimit), "Expiry Timestamp too far in the future");
+        require(expiresTimestamp <= block.timestamp.add(expiryLimit), "Expiry Timestamp too far in the future.");
 
         emit LogTimestampExtended(msg.sender, expiresTimestamp, retrievalCodeSecure);
         payments[retrievalCodeSecure].expiresTimestamp = expiresTimestamp;
 
         return true;
     }
+
     /**
-     * Shorten the expiry time of a payment by the exchange
-     *e
-     * @param retrievalCode  keccak256 hash generated locally and provided by the sender
-     * @param shortenSeconds - seconds to subtract to the original timestamp
+     * The contract owner can withdraw the collected fees
      *
      * @return true on success
      */
-    function expireTimeShorten(bytes32 retrievalCode, uint shortenSeconds) onlyIfRunning public returns (bool success) {
-        bytes32 retrievalCodeSecure = createRetrievalCodeSecure(retrievalCode, msg.sender);
+    function withdrawFees() onlyOwner beyondEndOfLifeOrOnlyIfRunning public returns (bool success) {
+        uint payoutFeeBalance = feeBalance;
 
-        // I hope this saves gas
-        uint expiresTimestamp = payments[retrievalCodeSecure].expiresTimestamp;
+        require(payoutFeeBalance > 0, "No Fees collected.");
 
-        require(expiresTimestamp > 0, "Payment does not exist");
-        require(expiresTimestamp > block.timestamp, "Payment expired");
+        feeBalance = 0;
 
-        expiresTimestamp = expiresTimestamp.sub(shortenSeconds);
+        emit LogFeesWithdrawn(msg.sender,payoutFeeBalance);
+        msg.sender.transfer(payoutFeeBalance);
+        return true;
+    }
 
-        require(expiresTimestamp >= block.timestamp, "Cannot be shortened beyond now");
+    /**
+     * The contract owner can withdraw adjust the Fee collection threshold
+     *
+     * @param newFeeThresholdPermille - threshold in permille.
+     *
+     * @return true on success
+     */
+    function adjustThresholdFee(uint newFeeThresholdPermille) onlyOwner public returns (bool success) {
+        require(newFeeThresholdPermille <= 1000," Threshold cannot be greater than 1000");
+        require(newFeeThresholdPermille > 0," Threshold cannot be 0");
 
-        emit LogTimestampShortend(msg.sender, expiresTimestamp, retrievalCodeSecure);
-        payments[retrievalCodeSecure].expiresTimestamp = expiresTimestamp;
+        feeThresholdPermille = newFeeThresholdPermille;
+
+        return true;
+    }
+
+    /**
+    * The contract owner can withdraw adjust the Fee collection threshold
+    *
+    * @param newFeeWei - flat fee in Wei.
+    *
+    * @return true on success
+    */
+    function adjustFee(uint newFeeWei) onlyOwner public returns (bool success) {
+        require(newFeeWei > 0," Fee cannot be 0. To disable fee set fee threshold to 1000.");
+
+        feeWei = newFeeWei;
 
         return true;
     }

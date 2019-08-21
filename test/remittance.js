@@ -16,7 +16,7 @@ contract("Remittance", accounts => {
     let retrievalCodeWrong;
     let retrievalCodeSecure;
 
-    const testAmount = new BN(10);
+    let testAmount = new BN(10);
 
 
     beforeEach('setup a new contract for each test', async function () {
@@ -30,6 +30,7 @@ contract("Remittance", accounts => {
     it("should have an owner", async function () {
         assert.strictEqual(await remi.getOwner(), sender, "There should be a contract owner.");
     });
+
 
     describe("creating a test deposit", function () {
 
@@ -59,7 +60,7 @@ contract("Remittance", accounts => {
                 assert.strictEqual(remiDepositTxObj.logs.length, 1, "Only one event is allowed in this transaction.");
 
                 await truffleAssert.eventEmitted(remiDepositTxObj, "LogDeposited", (ev) => {
-                    return ev.sender === sender && testAmount.eq(ev.amount) && ev.retrievalCodeSecure === retrievalCodeSecure;
+                    return ev.sender === sender && testAmount.eq(ev.amount) && testTimestampFuture.eq(ev.expiresTimestamp) && ev.retrievalCodeSecure === retrievalCodeSecure && ev.feePaid.eq(new BN(0));
                 });
             });
 
@@ -144,22 +145,6 @@ contract("Remittance", accounts => {
                 });
             });
 
-            it("should allow shortening of the expire Timestamp", async function () {
-                let remiPayment = await remi.payments.call(retrievalCodeSecure);
-                let shortenSeconds = new BN(100);
-
-                let remiShortenTimeTxObj = await remi.expireTimeShorten(retrievalCode, shortenSeconds, {from: exchange});
-
-                let remiPaymentUpdated = await remi.payments.call(retrievalCodeSecure);
-
-                assert.strictEqual(remiPayment.expiresTimestamp.sub(shortenSeconds).toString(), remiPaymentUpdated.expiresTimestamp.toString(), "Timestamps should be correctly updated.");
-                assert.strictEqual(remiShortenTimeTxObj.logs.length, 1, "Only one event is allowed in this transaction.");
-
-                await truffleAssert.eventEmitted(remiShortenTimeTxObj, "LogTimestampShortend", (ev) => {
-                    return ev.sender === exchange && remiPaymentUpdated.expiresTimestamp.eq(ev.expiresTimestamp) && ev.retrievalCodeSecure === retrievalCodeSecure;
-                });
-            });
-
         });
 
         describe("Withdraw fail cases", function () {
@@ -230,21 +215,6 @@ contract("Remittance", accounts => {
                 )
             });
 
-            it("should not allow shortening of the expire Timestamp beyond  now", async function () {
-                let shortenSeconds = (new BN(Date.now()).div(new BN(1000)).add(new BN(20000)));
-
-                await truffleAssert.fails(
-                    remi.expireTimeShorten(retrievalCodeSecure, shortenSeconds, {from: exchange})
-                )
-            });
-
-            it("should not allow shortening of the expire Timestamp by the payment sender", async function () {
-                let shortenSeconds = new BN(20000);
-
-                await truffleAssert.fails(
-                    remi.expireTimeShorten(retrievalCodeSecure, shortenSeconds, {from: sender})
-                )
-            });
 
         });
     });
@@ -259,11 +229,91 @@ contract("Remittance", accounts => {
 
         it("should not accept deposits without a retrieval code", async function () {
             await truffleAssert.fails(
-                remi.deposit("", new BN(Date.now()).div(new BN(1000)).add(new BN(120)), {from: sender, value: testAmount})
+                remi.deposit("", new BN(Date.now()).div(new BN(1000)).add(new BN(120)), {
+                    from: sender,
+                    value: testAmount
+                })
             )
+        });
+
+
+    });
+    describe("Fee management", function () {
+        let remiDepositTxObj;
+        let testTimestampNow;
+        let testTimestampFuture;
+
+        let testAmount = new BN(2900001);
+        let feePaid = new BN(29000);
+
+        beforeEach('make a deposit', async function () {
+            testTimestampNow = new BN(Date.now()).div(new BN(1000));
+            testTimestampFuture = testTimestampNow.add(new BN(120));
+            remiDepositTxObj = await remi.deposit(retrievalCodeSecure, testTimestampFuture, {
+                from: sender,
+                value: testAmount
+            });
+
+        });
+
+        it("should take a fee if the amount is high enough", async function () {
+            let feeBalance = await remi.feeBalance.call();
+            let testAmountDeposited = new BN(2871001); //testAmount - feePaid <=> 2900001 - 29000 = 2871001
+
+            assert.strictEqual(feeBalance.toString(), feePaid.toString(), "The paid fee should be exactly the fee balance.");
+
+            await truffleAssert.eventEmitted(remiDepositTxObj, "LogDeposited", (ev) => {
+                return ev.sender === sender && testAmountDeposited.eq(ev.amount) && ev.retrievalCodeSecure === retrievalCodeSecure && ev.feePaid.eq(feePaid);
+            });
+
+        });
+
+        it("should allow withdrawals of fees by the owner", async function () {
+            let senderBalanceBefore = new BN(await web3.eth.getBalance(sender));
+            let remiFeeBalance = await remi.feeBalance.call();
+
+            assert.strictEqual(feePaid.toString(), remiFeeBalance.toString(), "Fee balance should equal only one transaction.");
+
+            let remiFeeWithdrawTxObj = await remi.withdrawFees({from: sender});
+            let remiFeeWithdrawTx = await web3.eth.getTransaction(remiFeeWithdrawTxObj.tx);
+
+            let transactionFee = new BN(remiFeeWithdrawTxObj.receipt.gasUsed).mul(new BN(remiFeeWithdrawTx.gasPrice));
+            let senderBalanceAfter = new BN(await web3.eth.getBalance(sender));
+
+            assert.strictEqual(senderBalanceBefore.add(remiFeeBalance).sub(transactionFee).toString(), senderBalanceAfter.toString(), "Balance of sender should be the original balance plus 29000 minus the transaction fee.");
+
+            remiFeeBalance = await remi.feeBalance.call();
+            assert.strictEqual(new BN(0).toString(), remiFeeBalance.toString(), "There should be no wei left in the feeBalance");
+
+            assert.strictEqual(remiFeeWithdrawTxObj.logs.length, 1, "Only one event is allowed in this transaction.");
+
+            await truffleAssert.eventEmitted(remiFeeWithdrawTxObj, "LogFeesWithdrawn", (ev) => {
+                return ev.sender === sender && feePaid.eq(ev.amount);
+            });
+
+        });
+
+        it("should allow to update the fees by the owner", async function () {
+            let newFee = new BN(55555);
+
+            await remi.adjustFee(newFee, {from: sender});
+
+            let setFee = await remi.feeWei.call();
+
+            assert.strictEqual(newFee.toString(), setFee.toString(), "Fee should be set correctly");
+
+        });
+
+        it("should allow to update the fee threshold by the owner", async function () {
+            let newThresholdPermille = new BN(5);
+
+            await remi.adjustThresholdFee(newThresholdPermille, {from: sender});
+
+            let setThresholdPermille = await remi.feeThresholdPermille.call();
+
+            assert.strictEqual(newThresholdPermille.toString(), setThresholdPermille.toString(), "Fee Threshold should be set correctly");
+
         });
     });
 });
-
-
 
