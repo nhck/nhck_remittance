@@ -16,11 +16,15 @@ contract("Remittance", accounts => {
     let retrievalCodeWrong;
     let retrievalCodeSecure;
 
-    let testAmount = new BN(10);
+    const testAmount = new BN(10);
+    const testFeeAmount = new BN(2900001);
 
+    const initialExpiryLimit = new BN(10000);
+    const initialFeeWei = new BN(29000);
+    const initialFeeThresholdPerMille = new BN(10);
 
     beforeEach('setup a new contract for each test', async function () {
-        remi = await RemittanceFactory.new(true, new BN(10000), {from: sender});
+        remi = await RemittanceFactory.new(true, initialExpiryLimit, initialFeeWei, initialFeeThresholdPerMille, {from: sender});
 
         retrievalCode = await remi.createRetrievalCode("Part One" + "Part Two");
         retrievalCodeWrong = await remi.createRetrievalCode("Wrong" + "Code");
@@ -31,7 +35,6 @@ contract("Remittance", accounts => {
         assert.strictEqual(await remi.getOwner(), sender, "There should be a contract owner.");
     });
 
-
     describe("creating a test deposit", function () {
 
         let remiDepositTxObj;
@@ -41,17 +44,17 @@ contract("Remittance", accounts => {
         beforeEach('make a deposit', async function () {
             testTimestampNow = new BN(Date.now()).div(new BN(1000));
             testTimestampFuture = testTimestampNow.add(new BN(120));
+
             remiDepositTxObj = await remi.deposit(retrievalCodeSecure, testTimestampFuture, {
                 from: sender,
                 value: testAmount
             });
-
         });
 
         describe("testing the standard functionality", function () {
 
             it("should accept deposits", async function () {
-                let remiPayment = await remi.payments.call(retrievalCodeSecure);
+                const remiPayment = await remi.payments.call(retrievalCodeSecure);
 
                 assert.strictEqual("10", new BN(remiPayment.amount).toString(), "Deposited amount should be 10.");
                 assert.strictEqual(sender, remiPayment.sender, "Address of sender should be recorded.");
@@ -66,17 +69,17 @@ contract("Remittance", accounts => {
 
             it("should allow correct withdrawals", async function () {
 
-                let exchangeBalanceBefore = new BN(await web3.eth.getBalance(exchange));
+                const exchangeBalanceBefore = new BN(await web3.eth.getBalance(exchange));
 
-                let remiWithdrawTxObj = await remi.withdraw(retrievalCode, {from: exchange});
-                let remiWithdrawTx = await web3.eth.getTransaction(remiWithdrawTxObj.tx);
+                const remiWithdrawTxObj = await remi.withdraw(retrievalCode, {from: exchange});
+                const remiWithdrawTx = await web3.eth.getTransaction(remiWithdrawTxObj.tx);
 
-                let transactionFee = new BN(remiWithdrawTxObj.receipt.gasUsed).mul(new BN(remiWithdrawTx.gasPrice));
-                let exchangeBalanceAfter = new BN(await web3.eth.getBalance(exchange));
+                const transactionFee = new BN(remiWithdrawTxObj.receipt.gasUsed).mul(new BN(remiWithdrawTx.gasPrice));
+                const exchangeBalanceAfter = new BN(await web3.eth.getBalance(exchange));
 
                 assert.strictEqual(exchangeBalanceBefore.add(testAmount).sub(transactionFee).toString(), exchangeBalanceAfter.toString(), "Balance of exchange should be the original balance plus 10 minus the transaction fee.");
 
-                let remiPayment = await remi.payments.call(retrievalCodeSecure);
+                const remiPayment = await remi.payments.call(retrievalCodeSecure);
                 assert.strictEqual(new BN(0).toString(), new BN(remiPayment.amount).toString(), "There should be no wei left in the account");
 
                 assert.strictEqual(remiWithdrawTxObj.logs.length, 1, "Only one event is allowed in this transaction.");
@@ -89,7 +92,7 @@ contract("Remittance", accounts => {
             it("should allow reclaim", async function () {
 
                 //get the timedifference that is left and add 2000ms as grace period
-                let timeDiff = testTimestampFuture.mul(new BN(1000)).sub(new BN(Date.now())).add(new BN(2000));
+                const timeDiff = testTimestampFuture.mul(new BN(1000)).sub(new BN(Date.now())).add(new BN(2000));
                 //If there is a time difference left than we have to wait a bit and then make sure we have a fresh block
                 if (timeDiff.gt(new BN(0))) {
                     //wait for the timedifference to pass
@@ -97,29 +100,29 @@ contract("Remittance", accounts => {
                         setTimeout(resolve, timeDiff);
                     });
 
-                    let currentBlock = await web3.eth.getBlockNumber();
-                    //Wait for the next Block to be mined, after that proceed.
-                    while (currentBlock >= await web3.eth.getBlockNumber()) {
-                        setTimeout(function () {
-                        }, 1000);
-                    }
+                    const remiDummyTxReceipt = await web3.eth.sendTransaction({
+                        from: coinbase,
+                        to: sender,
+                        value: testAmount
+                    });
+                    assert.isTrue(remiDummyTxReceipt.status, "Dummy transaction failed. We cannot be sure, we are on the next block")
                 }
 
-                let remiPayment = await remi.payments.call(retrievalCodeSecure);
-                assert.strictEqual("10", new BN(remiPayment.amount).toString(), "Target amount should be 10.");
+                const remiPaymentBefore = await remi.payments.call(retrievalCodeSecure);
+                assert.strictEqual("10", new BN(remiPaymentBefore.amount).toString(), "Target amount should be 10.");
 
-                let senderBalanceBefore = new BN(await web3.eth.getBalance(sender));
+                const senderBalanceBefore = new BN(await web3.eth.getBalance(sender));
 
-                let remiReclaimTxObj = await remi.reclaim(retrievalCodeSecure, {from: sender});
-                let remiReclaimTx = await web3.eth.getTransaction(remiReclaimTxObj.tx);
+                const remiReclaimTxObj = await remi.reclaim(retrievalCodeSecure, {from: sender});
+                const remiReclaimTx = await web3.eth.getTransaction(remiReclaimTxObj.tx);
 
-                let transactionFee = new BN(remiReclaimTxObj.receipt.gasUsed).mul(new BN(remiReclaimTx.gasPrice));
-                let senderBalanceAfter = new BN(await web3.eth.getBalance(sender));
+                const transactionFee = new BN(remiReclaimTxObj.receipt.gasUsed).mul(new BN(remiReclaimTx.gasPrice));
+                const senderBalanceAfter = new BN(await web3.eth.getBalance(sender));
 
                 assert.strictEqual(senderBalanceBefore.add(testAmount).sub(transactionFee).toString(), senderBalanceAfter.toString(), "Balance of sender should be the original balance plus 10 minus the transaction fee.");
 
-                remiPayment = await remi.payments.call(retrievalCodeSecure);
-                assert.strictEqual(new BN(0).toString(), new BN(remiPayment.amount).toString(), "There should be no wei left in the account");
+                const remiPaymentAfter = await remi.payments.call(retrievalCodeSecure);
+                assert.strictEqual(new BN(0).toString(), new BN(remiPaymentAfter.amount).toString(), "There should be no wei left in the account");
 
                 assert.strictEqual(remiReclaimTxObj.logs.length, 1, "Only one event is allowed in this transaction.");
 
@@ -130,12 +133,11 @@ contract("Remittance", accounts => {
 
 
             it("should allow extension of the expire Timestamp", async function () {
-                let remiPayment = await remi.payments.call(retrievalCodeSecure);
-                let extensionSeconds = new BN(100);
+                const remiPayment = await remi.payments.call(retrievalCodeSecure);
+                const extensionSeconds = new BN(100);
 
-                let remiExpireTimeTxObj = await remi.expireTimeExtend(retrievalCodeSecure, extensionSeconds, {from: sender});
-
-                let remiPaymentUpdated = await remi.payments.call(retrievalCodeSecure);
+                const remiExpireTimeTxObj = await remi.expireTimeExtend(retrievalCodeSecure, extensionSeconds, {from: sender});
+                const remiPaymentUpdated = await remi.payments.call(retrievalCodeSecure);
 
                 assert.strictEqual(remiPayment.expiresTimestamp.add(extensionSeconds).toString(), remiPaymentUpdated.expiresTimestamp.toString(), "Timestamps should be correctly updated.");
                 assert.strictEqual(remiExpireTimeTxObj.logs.length, 1, "Only one event is allowed in this transaction.");
@@ -144,7 +146,6 @@ contract("Remittance", accounts => {
                     return ev.sender === sender && remiPaymentUpdated.expiresTimestamp.eq(ev.expiresTimestamp) && ev.retrievalCodeSecure === retrievalCodeSecure;
                 });
             });
-
         });
 
         describe("Withdraw fail cases", function () {
@@ -167,19 +168,20 @@ contract("Remittance", accounts => {
                 )
             });
 
-
             it("should not allow withdrawals that expired", async function () {
-                let timeDiff = testTimestampFuture.mul(new BN(1000)).sub(new BN(Date.now())).add(new BN(2000));
+                const timeDiff = testTimestampFuture.mul(new BN(1000)).sub(new BN(Date.now())).add(new BN(2000));
                 if (timeDiff.gt(new BN(0))) {
                     await new Promise(resolve => {
                         setTimeout(resolve, timeDiff);
                     });
-                    let currentBlock = await web3.eth.getBlockNumber();
 
-                    while (currentBlock >= await web3.eth.getBlockNumber()) {
-                        setTimeout(function () {
-                        }, 1000);
-                    }
+                    const remiDummyTxReceipt = await web3.eth.sendTransaction({
+                        from: coinbase,
+                        to: sender,
+                        value: testAmount
+                    });
+
+                    assert.isTrue(remiDummyTxReceipt.status, "Dummy transaction failed. We cannot be sure, we are on the next block")
                 }
                 await truffleAssert.fails(
                     remi.withdraw(retrievalCode, {from: exchange})
@@ -188,6 +190,7 @@ contract("Remittance", accounts => {
         });
 
         describe("Reclaim fail cases", function () {
+
             it("should not allow reclaims that are not due", async function () {
 
                 assert.isTrue((new BN(Date.now())).div(new BN(1000)).lt(testTimestampFuture), "Test condition not met: Future Timestamp has already expired");
@@ -200,7 +203,7 @@ contract("Remittance", accounts => {
         describe("Expired Timestamps fail cases", function () {
 
             it("should not allow extension of the expire Timestamp beyond the limit", async function () {
-                let extensionSeconds = new BN(10100);
+                const extensionSeconds = new BN(10100);
 
                 await truffleAssert.fails(
                     remi.expireTimeExtend(retrievalCodeSecure, extensionSeconds, {from: sender})
@@ -208,14 +211,12 @@ contract("Remittance", accounts => {
             });
 
             it("should not allow extension of the expire Timestamp by the exchange", async function () {
-                let extensionSeconds = new BN(100);
+                const extensionSeconds = new BN(100);
 
                 await truffleAssert.fails(
                     remi.expireTimeExtend(retrievalCodeSecure, extensionSeconds, {from: exchange})
                 )
             });
-
-
         });
     });
 
@@ -235,84 +236,76 @@ contract("Remittance", accounts => {
                 })
             )
         });
-
-
     });
+
     describe("Fee management", function () {
         let remiDepositTxObj;
         let testTimestampNow;
         let testTimestampFuture;
 
-        let testAmount = new BN(2900001);
-        let feePaid = new BN(29000);
 
         beforeEach('make a deposit', async function () {
             testTimestampNow = new BN(Date.now()).div(new BN(1000));
             testTimestampFuture = testTimestampNow.add(new BN(120));
             remiDepositTxObj = await remi.deposit(retrievalCodeSecure, testTimestampFuture, {
                 from: sender,
-                value: testAmount
+                value: testFeeAmount
             });
-
         });
 
         it("should take a fee if the amount is high enough", async function () {
-            let feeBalance = await remi.feeBalance.call();
-            let testAmountDeposited = new BN(2871001); //testAmount - feePaid <=> 2900001 - 29000 = 2871001
+            const feeBalance = await remi.feeBalance.call(sender);
+            const testAmountDeposited = new BN(2871001); //testAmount - initialFeeWei <=> 2900001 - 29000 = 2871001
 
-            assert.strictEqual(feeBalance.toString(), feePaid.toString(), "The paid fee should be exactly the fee balance.");
+            assert.strictEqual(feeBalance.toString(), initialFeeWei.toString(), "The paid fee should be exactly the fee balance.");
 
             await truffleAssert.eventEmitted(remiDepositTxObj, "LogDeposited", (ev) => {
-                return ev.sender === sender && testAmountDeposited.eq(ev.amount) && ev.retrievalCodeSecure === retrievalCodeSecure && ev.feePaid.eq(feePaid);
+                return ev.sender === sender && testAmountDeposited.eq(ev.amount) && ev.retrievalCodeSecure === retrievalCodeSecure && ev.feePaid.eq(initialFeeWei);
             });
-
         });
 
         it("should allow withdrawals of fees by the owner", async function () {
-            let senderBalanceBefore = new BN(await web3.eth.getBalance(sender));
-            let remiFeeBalance = await remi.feeBalance.call();
+            const senderBalanceBefore = new BN(await web3.eth.getBalance(sender));
+            const remiFeeBalanceBefore = await remi.feeBalance.call(sender);
 
-            assert.strictEqual(feePaid.toString(), remiFeeBalance.toString(), "Fee balance should equal only one transaction.");
+            assert.strictEqual(initialFeeWei.toString(), remiFeeBalanceBefore.toString(), "Fee balance should equal only one transaction.");
 
-            let remiFeeWithdrawTxObj = await remi.withdrawFees({from: sender});
-            let remiFeeWithdrawTx = await web3.eth.getTransaction(remiFeeWithdrawTxObj.tx);
+            const remiFeeWithdrawTxObj = await remi.withdrawFees({from: sender});
+            const remiFeeWithdrawTx = await web3.eth.getTransaction(remiFeeWithdrawTxObj.tx);
 
-            let transactionFee = new BN(remiFeeWithdrawTxObj.receipt.gasUsed).mul(new BN(remiFeeWithdrawTx.gasPrice));
-            let senderBalanceAfter = new BN(await web3.eth.getBalance(sender));
+            const transactionFee = new BN(remiFeeWithdrawTxObj.receipt.gasUsed).mul(new BN(remiFeeWithdrawTx.gasPrice));
+            const senderBalanceAfter = new BN(await web3.eth.getBalance(sender));
 
-            assert.strictEqual(senderBalanceBefore.add(remiFeeBalance).sub(transactionFee).toString(), senderBalanceAfter.toString(), "Balance of sender should be the original balance plus 29000 minus the transaction fee.");
+            assert.strictEqual(senderBalanceBefore.add(remiFeeBalanceBefore).sub(transactionFee).toString(), senderBalanceAfter.toString(), "Balance of sender should be the original balance plus 29000 minus the transaction fee.");
 
-            remiFeeBalance = await remi.feeBalance.call();
-            assert.strictEqual(new BN(0).toString(), remiFeeBalance.toString(), "There should be no wei left in the feeBalance");
+            const remiFeeBalanceAfter = await remi.feeBalance.call(sender);
+            assert.strictEqual(new BN(0).toString(), remiFeeBalanceAfter.toString(), "There should be no wei left in the feeBalance");
 
             assert.strictEqual(remiFeeWithdrawTxObj.logs.length, 1, "Only one event is allowed in this transaction.");
 
             await truffleAssert.eventEmitted(remiFeeWithdrawTxObj, "LogFeesWithdrawn", (ev) => {
-                return ev.sender === sender && feePaid.eq(ev.amount);
+                return ev.sender === sender && initialFeeWei.eq(ev.amount);
             });
-
         });
 
         it("should allow to update the fees by the owner", async function () {
-            let newFee = new BN(55555);
+            const newFee = new BN(55555);
 
             await remi.adjustFee(newFee, {from: sender});
 
-            let setFee = await remi.feeWei.call();
+            const setFee = await remi.feeWei.call();
 
             assert.strictEqual(newFee.toString(), setFee.toString(), "Fee should be set correctly");
-
         });
 
         it("should allow to update the fee threshold by the owner", async function () {
-            let newThresholdPermille = new BN(5);
+            const newThresholdPerMille = new BN(5);
 
-            await remi.adjustThresholdFee(newThresholdPermille, {from: sender});
+            const remiThresholdTxObj = await remi.adjustThresholdFee(newThresholdPerMille, {from: sender});
 
-            let setThresholdPermille = await remi.feeThresholdPermille.call();
+            const setThresholdPerMille = await remi.feeThresholdPerMille.call();
 
-            assert.strictEqual(newThresholdPermille.toString(), setThresholdPermille.toString(), "Fee Threshold should be set correctly");
-
+            assert.strictEqual(newThresholdPerMille.toString(), setThresholdPerMille.toString(), "Fee Threshold should be set correctly");
         });
     });
 });
