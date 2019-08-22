@@ -34,7 +34,7 @@ contract("Remittance", accounts => {
     it("should have an owner", async function () {
         assert.strictEqual(await remi.getOwner(), sender, "There should be a contract owner.");
     });
-
+    
     describe("creating a test deposit", function () {
 
         let remiDepositTxObj;
@@ -288,24 +288,69 @@ contract("Remittance", accounts => {
             });
         });
 
+        it("should allow withdrawals of fees by a former owner of the contract", async function () {
+
+            const remiFeeBalanceBefore = await remi.feeBalance.call(sender);
+            assert.strictEqual(initialFeeWei.toString(), remiFeeBalanceBefore.toString(), "Fee balance should equal only one transaction.");
+
+            const remiChangeOwnerTxObj = await remi.changeOwner(thirdparty, {from: sender});
+            assert.strictEqual(remiChangeOwnerTxObj.logs.length, 1, "Only one event is allowed in this transaction.");
+
+            const senderBalanceBefore = new BN(await web3.eth.getBalance(sender));
+
+            await truffleAssert.eventEmitted(remiChangeOwnerTxObj, "LogOwnerChanged", (ev) => {
+                return ev.sender === sender && ev.newOwner === thirdparty;
+            });
+
+            const remiFeeWithdrawTxObj = await remi.withdrawFees({from: sender});
+            const remiFeeWithdrawTx = await web3.eth.getTransaction(remiFeeWithdrawTxObj.tx);
+
+            const transactionFee = new BN(remiFeeWithdrawTxObj.receipt.gasUsed).mul(new BN(remiFeeWithdrawTx.gasPrice));
+            const senderBalanceAfter = new BN(await web3.eth.getBalance(sender));
+
+            assert.strictEqual(senderBalanceBefore.add(remiFeeBalanceBefore).sub(transactionFee).toString(), senderBalanceAfter.toString(), "Balance of sender should be the original balance plus 29000 minus the transaction fee.");
+
+            const remiFeeBalanceAfter = await remi.feeBalance.call(sender);
+            assert.strictEqual(new BN(0).toString(), remiFeeBalanceAfter.toString(), "There should be no wei left in the feeBalance");
+
+            assert.strictEqual(remiFeeWithdrawTxObj.logs.length, 1, "Only one event is allowed in this transaction.");
+
+            await truffleAssert.eventEmitted(remiFeeWithdrawTxObj, "LogFeesWithdrawn", (ev) => {
+                return ev.sender === sender && initialFeeWei.eq(ev.amount);
+            });
+        });
+
         it("should allow to update the fees by the owner", async function () {
-            const newFee = new BN(55555);
+            const newFeeWei = new BN(55555);
 
-            await remi.adjustFee(newFee, {from: sender});
+            const remiAdjustFeeTxObj = await remi.adjustFee(newFeeWei, {from: sender});
 
-            const setFee = await remi.feeWei.call();
+            const setFeeWei = await remi.feeWei.call();
 
-            assert.strictEqual(newFee.toString(), setFee.toString(), "Fee should be set correctly");
+            assert.strictEqual(newFeeWei.toString(), setFeeWei.toString(), "Fee should be set correctly");
+
+            assert.strictEqual(remiAdjustFeeTxObj.logs.length, 1, "Only one event is allowed in this transaction.");
+
+            await truffleAssert.eventEmitted(remiAdjustFeeTxObj, "LogFeeUpdated", (ev) => {
+                return ev.sender === sender && newFeeWei.eq(ev.newFeeWei);
+            });
+
         });
 
         it("should allow to update the fee threshold by the owner", async function () {
-            const newThresholdPerMille = new BN(5);
+            const newFeeThresholdPerMille = new BN(5);
 
-            const remiThresholdTxObj = await remi.adjustThresholdFee(newThresholdPerMille, {from: sender});
+            const remiThresholdTxObj = await remi.adjustThresholdFee(newFeeThresholdPerMille, {from: sender});
 
-            const setThresholdPerMille = await remi.feeThresholdPerMille.call();
+            const setFeeThresholdPerMille = await remi.feeThresholdPerMille.call();
 
-            assert.strictEqual(newThresholdPerMille.toString(), setThresholdPerMille.toString(), "Fee Threshold should be set correctly");
+            assert.strictEqual(newFeeThresholdPerMille.toString(), setFeeThresholdPerMille.toString(), "Fee Threshold should be set correctly");
+
+            assert.strictEqual(remiThresholdTxObj.logs.length, 1, "Only one event is allowed in this transaction.");
+
+            await truffleAssert.eventEmitted(remiThresholdTxObj, "LogFeeThresholdPerMilleUpdated", (ev) => {
+                return ev.sender === sender && newFeeThresholdPerMille.eq(ev.newFeeThresholdPerMille);
+            });
         });
     });
 });

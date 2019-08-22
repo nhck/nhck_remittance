@@ -9,10 +9,12 @@ import './Stoppable.sol';
 contract Remittance is Stoppable {
     using SafeMath for uint;
 
-    event LogWithdrawn(address indexed sender, uint amount, bytes32 indexed retrievalCodeSecure);
     event LogDeposited(address indexed sender, uint amount, uint expiresTimestamp, bytes32 indexed retrievalCodeSecure, uint feePaid);
+    event LogWithdrawn(address indexed sender, uint amount, bytes32 indexed retrievalCodeSecure);
+
     event LogDepositReclaimed(address indexed sender, uint amount, bytes32 indexed retrievalCodeSecure);
     event LogTimestampExtended(address indexed sender, uint expiresTimestamp, bytes32 indexed retrievalCodeSecure);
+
     event LogFeesWithdrawn(address indexed sender, uint amount);
     event LogFeeUpdated(address indexed sender, uint newFeeWei);
     event LogFeeThresholdPerMilleUpdated(address indexed sender, uint newFeeThresholdPerMille);
@@ -33,7 +35,7 @@ contract Remittance is Stoppable {
 
     mapping(address => uint) public feeBalance;
 
-    uint perMille = 1000;
+    uint constant perMille = 1000;
 
     /**
      *
@@ -87,7 +89,8 @@ contract Remittance is Stoppable {
         if (paymentAmount.mul(feeThresholdPerMille) > feeWei.mul(perMille)) {
             feeLog = feeWei;
             paymentAmount = msg.value.sub(feeWei);
-            feeBalance[getOwner()] = feeBalance[getOwner()].add(feeWei);
+            address owner = getOwner();
+            feeBalance[owner] = feeBalance[owner].add(feeWei);
         }
 
         payments[retrievalCodeSecure] = Payment({
@@ -173,7 +176,7 @@ contract Remittance is Stoppable {
      *
      * @return true on success
      */
-    function withdrawFees() onlyOwner beyondEndOfLifeOrOnlyIfRunning public returns (bool success) {
+    function withdrawFees() beyondEndOfLifeOrOnlyIfRunning public returns (bool success) {
         uint payoutFeeBalance = feeBalance[msg.sender];
 
         require(payoutFeeBalance > 0, "No Fees collected.");
@@ -193,10 +196,10 @@ contract Remittance is Stoppable {
      * @return true on success
      */
     function adjustThresholdFee(uint newFeeThresholdPerMille) onlyOwner public returns (bool success) {
-        require(newFeeThresholdPerMille <= perMille, " Threshold cannot be greater than 1000");
-        require(newFeeThresholdPerMille > 0, " Threshold cannot be 0");
+        require(newFeeThresholdPerMille <= perMille, "Threshold cannot be greater than 1000");
+        require(newFeeThresholdPerMille > 0, "Threshold cannot be 0");
 
-        emit LogFeeThresholdPerMilleUpdated(msg.sender,newFeeThresholdPerMille);
+        emit LogFeeThresholdPerMilleUpdated(msg.sender, newFeeThresholdPerMille);
         feeThresholdPerMille = newFeeThresholdPerMille;
 
         return true;
@@ -212,7 +215,7 @@ contract Remittance is Stoppable {
     function adjustFee(uint newFeeWei) onlyOwner public returns (bool success) {
         require(newFeeWei > 0, " Fee cannot be 0. To disable fee set fee threshold to 1000.");
 
-        emit LogFeeUpdated(msg.sender,newFeeWei);
+        emit LogFeeUpdated(msg.sender, newFeeWei);
         feeWei = newFeeWei;
 
         return true;
